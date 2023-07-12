@@ -40,6 +40,14 @@
   types
   value
   z3_mappings)
- (libraries core z3)
+ (libraries
+  core
+  z3
+  colibri2.core
+  colibri2.solver
+  colibri2.theories.bool
+  colibri2.theories.LRA.stages.stage0
+  colibri2.theories.fp
+  ocplib-simplex)
  (preprocess
   (pps ppx_jane)))
