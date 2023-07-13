@@ -11,7 +11,9 @@ module Context = Colibri2_stdlib.Context
 module Interp = Colibri2_core.Interp
 
 type expr = Term.t
-type model = (expr * Colibri2_core.Value.t) list
+
+type model =
+  Colibri2_core.Egraph.wt * (Term.Const.t * Colibri2_core.Value.t) list
 
 module Var = struct
   include Term
@@ -57,7 +59,7 @@ type solver = {
     | `StepLimitReached ];
   mutable status_colibri :
     [ `No | `Sat | `Unsat | `Unknown | `StepLimitReached ] Context.Ref.t;
-  mutable decls : expr Context.Queue.t;
+  mutable decls : Term.Const.S.t;
 }
 
 type status =
@@ -79,6 +81,19 @@ let get_sort (e : Types.expr_type) : Term.ty =
   | `I64Type -> Ty.bitv 64
   | `F32Type -> Ty.float 8 24
   | `F64Type -> Ty.float 11 53
+
+module SHT = Hashtbl.Make (Symbol)
+
+let sym_cache = SHT.create 17
+
+let sym2const (s : Symbol.t) =
+  match SHT.find_opt sym_cache s with
+  | None ->
+      let x = Symbol.to_string s and t = Symbol.type_of s in
+      let cst = Term.Const.mk (Dolmen_std.Path.global x) (get_sort t) in
+      SHT.add sym_cache s cst;
+      cst
+  | Some c -> c
 
 module I :
   Op_intf.S
@@ -581,123 +596,150 @@ let encore_existential_quantifier (vars_list : Symbol.t list) (body : expr)
   let vars = List.map symbol_to_var vars_list in
   Term.ex ([], vars) body
 
-let rec encode_expr (e : Expression.t) : expr =
+let encore_expr_aux ?(record_sym = fun _ -> ()) (e : Expression.t) : expr =
   let open Expression in
-  match e with
-  | Val v -> encode_val v
-  | SymPtr (base, offset) ->
-      let base' = encode_val (Num (I32 base)) in
-      let offset' = encode_expr offset in
-      Term.Bitv.add base' offset'
-  | Unop (op, e) ->
-      let e' = encode_expr e in
-      encode_unop op e'
-  | Binop (I32 ExtendS, Val (Num (I32 n)), e) ->
-      let e' = encode_expr e in
-      Term.Bitv.sign_extend (Int32.to_int n) e'
-  | Binop (I32 ExtendU, Val (Num (I32 n)), e) ->
-      let e' = encode_expr e in
-      Term.Bitv.zero_extend (Int32.to_int n) e'
-  | Binop (op, e1, e2) ->
-      let e1' = encode_expr e1 and e2' = encode_expr e2 in
-      encode_binop op e1' e2'
-  | Triop (op, e1, e2, e3) ->
-      let e1' = encode_expr e1
-      and e2' = encode_expr e2
-      and e3' = encode_expr e3 in
-      encode_triop op e1' e2' e3'
-  | Relop (op, e1, e2) ->
-      let e1' = encode_expr e1 and e2' = encode_expr e2 in
-      encode_relop op e1' e2'
-  | Cvtop (op, e) ->
-      let e' = encode_expr e in
-      encode_cvtop op e'
-  | Symbol s ->
-      let x = Symbol.to_string s and t = Symbol.type_of s in
-      Term.of_cst (Term.Const.mk (Dolmen_std.Path.global x) (get_sort t))
-  | Extract (e, h, l) ->
-      let e' = encode_expr e in
-      Term.Bitv.extract ((h * 8) - 1) (l * 8) e'
-  | Concat (e1, e2) ->
-      let e1' = encode_expr e1 and e2' = encode_expr e2 in
-      Term.Bitv.concat e1' e2'
-  | Quantifier (t, vars, body, patterns) -> (
-      let body' = encode_expr body in
-      let encode_pattern (p : t list) =
-        Term.multi_trigger (List.map encode_expr p)
-      in
-      let patterns' = List.map encode_pattern patterns in
-      match t with
-      | Forall -> encode_unviversal_quantifier vars body' patterns'
-      | Exists -> encore_existential_quantifier vars body' patterns')
+  let rec aux e =
+    match e with
+    | Val v -> encode_val v
+    | SymPtr (base, offset) ->
+        let base' = encode_val (Num (I32 base)) in
+        let offset' = aux offset in
+        Term.Bitv.add base' offset'
+    | Unop (op, e) ->
+        let e' = aux e in
+        encode_unop op e'
+    | Binop (I32 ExtendS, Val (Num (I32 n)), e) ->
+        let e' = aux e in
+        Term.Bitv.sign_extend (Int32.to_int n) e'
+    | Binop (I32 ExtendU, Val (Num (I32 n)), e) ->
+        let e' = aux e in
+        Term.Bitv.zero_extend (Int32.to_int n) e'
+    | Binop (op, e1, e2) ->
+        let e1' = aux e1 and e2' = aux e2 in
+        encode_binop op e1' e2'
+    | Triop (op, e1, e2, e3) ->
+        let e1' = aux e1 and e2' = aux e2 and e3' = aux e3 in
+        encode_triop op e1' e2' e3'
+    | Relop (op, e1, e2) ->
+        let e1' = aux e1 and e2' = aux e2 in
+        encode_relop op e1' e2'
+    | Cvtop (op, e) ->
+        let e' = aux e in
+        encode_cvtop op e'
+    | Symbol s ->
+        let cst = sym2const s in
+        record_sym cst;
+        Term.of_cst cst
+    | Extract (e, h, l) ->
+        let e' = aux e in
+        Term.Bitv.extract ((h * 8) - 1) (l * 8) e'
+    | Concat (e1, e2) ->
+        let e1' = aux e1 and e2' = aux e2 in
+        Term.Bitv.concat e1' e2'
+    | Quantifier (t, vars, body, patterns) -> (
+        let body' = aux body in
+        let encode_pattern (p : t list) = Term.multi_trigger (List.map aux p) in
+        let patterns' = List.map encode_pattern patterns in
+        match t with
+        | Forall -> encode_unviversal_quantifier vars body' patterns'
+        | Exists -> encore_existential_quantifier vars body' patterns')
+  in
+  aux e
 
+let encode_expr e = encore_expr_aux e
 let expr_to_smtstring _ _ = ""
 
 let mk_solver () : solver =
   let scheduler = Scheduler.new_solver ~learning:true () in
+  Scheduler.init_theories scheduler;
   let ctx = Scheduler.get_context scheduler in
   {
     scheduler;
     state = `Search;
     status_colibri = Context.Ref.create ctx `No;
-    decls = Context.Queue.create ctx;
+    decls = Term.Const.S.empty;
   }
 
 let interrupt () = ()
 
-let translate ({ state; status_colibri; decls = odecls; _ } : solver) : solver =
+let translate ({ state; status_colibri; decls; _ } : solver) : solver =
   let scheduler = Scheduler.new_solver ~learning:true () in
-  let ctx = Scheduler.get_context scheduler in
-  let decls = Context.Queue.create ctx in
-  Context.Queue.iter (Context.Queue.enqueue decls) odecls;
   { scheduler; state; status_colibri; decls }
 
-let add_solver (s : solver) (es : expr list) : unit =
+let add_solver (s : solver) (es : Expression.t list) : unit =
   Scheduler.add_assertion s.scheduler (fun d ->
+      let es' =
+        List.map
+          (encore_expr_aux ~record_sym:(fun c ->
+               s.decls <- Term.Const.S.add c s.decls))
+          es
+      in
       List.iter
         (fun e ->
           let n = Colibri2_core.Ground.convert d e in
-          Colibri2_core.Egraph.register d n)
-        es)
+          Colibri2_core.Egraph.register d n;
+          Colibri2_theories_bool.Boolean.set_true d n)
+        es')
 
-let check (s : solver) (es : expr list) : status =
+let check (s : solver) (es : Expression.t list) : status =
   add_solver s es;
-  Scheduler.check_sat s.scheduler
+  let rs = Scheduler.check_sat s.scheduler in
+  rs
 
 let get_model (s : solver) : model option =
-  match s.state with
+  match Scheduler.check_sat s.scheduler with
   | `Sat d | `Unknown d ->
       let l =
-        Context.Queue.fold
+        Term.Const.S.fold_left
           (fun acc c ->
-            let e = Expr.Term.apply c [] [] in
+            let e = Expr.Term.apply_cst c [] [] in
             let v = Interp.interp d e in
             (c, v) :: acc)
           [] s.decls
       in
-      Some l
-  | _ -> None
+      Some (d, l)
+  | `Unsat -> assert false
+  | `StepLimitReached -> assert false
+  | `Search -> assert false
 
 let mk_opt () : optimize = Sim.Core.empty ~is_int:false ~check_invs:false
-let add_opt (_o : optimize) (_es : expr list) : unit = assert false
+let add_opt (_o : optimize) (_es : Expression.t list) : unit = assert false
 
-let maximize (o : optimize) (e : expr) : handle =
-  Sim.Solve.maximize o (Sim.Core.P.from_list [ (e, A.one) ])
+let maximize (o : optimize) (e : Expression.t) : handle =
+  Sim.Solve.maximize o (Sim.Core.P.from_list [ (encore_expr_aux e, A.one) ])
 
-let minimize (_o : optimize) (_e : expr) : handle = assert false
+let minimize (_o : optimize) (_e : Expression.t) : handle = assert false
 
 let get_opt_model (o : optimize) : model Option.t =
   match Sim.Result.get None o with
   | Sim.Core.Sat s ->
-      let model = (Lazy.force s).Sim.Core.main_vars in
-      let l = List.map (fun (n, av) -> (n, LRA.RealValue.of_value av)) model in
-      Some l
+      let _model = (Lazy.force s).Sim.Core.main_vars in
+      (* let l = List.map (fun (n, av) -> (n, LRA.RealValue.of_value av)) model in
+         Some l *)
+      None
   | Sim.Core.Unknown | Sim.Core.Unsat _ | Sim.Core.Unbounded _
   | Sim.Core.Max (_, _) ->
       None
 
-let value_of_const (_model : model) (_c : Expression.t) : Value.t option =
-  assert false
+let get_value (ty : Types.expr_type) (v : Colibri2_core.Value.t) =
+  match ty with
+  | `BoolType -> (
+      match
+        Colibri2_core.Value.value Colibri2_theories_bool.Boolean.BoolValue.key v
+      with
+      | Some b -> Some (Value.Bool b)
+      | None -> None)
+  | `I32Type | `I64Type -> assert false
+  | `F32Type | `F64Type -> assert false
+  | `IntType | `RealType | `StrType -> assert false
+
+let value_of_const ((d, _l) : model) (e : Expression.t) : Value.t option =
+  let syms = ref Term.Const.S.empty in
+  let e' =
+    encore_expr_aux ~record_sym:(fun c -> syms := Term.Const.S.add c !syms) e
+  in
+  let v = Colibri2_core.Interp.interp d e' in
+  get_value (Expression.type_of e) v
 
 let value_binds ?(symbols : Symbol.t list option) (_model : model) : Model.t =
   ignore symbols;
