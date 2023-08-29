@@ -32,4 +32,5 @@ module type S = sig
   val value_of_const : model -> Expression.t -> Value.t Option.t
   val value_binds : ?symbols:Symbol.t list -> model -> Model.t
   val satisfiability : status -> satisfiability
+  val set_default_axioms : solver -> unit
 end

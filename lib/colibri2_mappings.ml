@@ -9,6 +9,11 @@ module LRA = Colibri2_theories_LRA
 module Scheduler = Colibri2_solver.Scheduler
 module Context = Colibri2_stdlib.Context
 module Interp = Colibri2_core.Interp
+module Uninterp = Colibri2_theories_quantifiers.Uninterp
+module Init = Colibri2_core.Init
+module Ground = Colibri2_core.Ground
+module IArray = Colibri2_popop_lib.IArray
+module Egraph = Colibri2_core.Egraph
 
 type expr = Term.t
 
@@ -69,6 +74,228 @@ type status =
   | `Unsat
   | `StepLimitReached ]
 
+(* additional builtins *)
+
+type _ Expr.t +=
+  | IntToString
+  | StringToInt
+  | RealToString
+  | StringToReal
+  | TrimString
+  | F32ToString
+  | StringToF32
+  | F64ToString
+  | StringToF64
+
+let float32_ty = Ty.float 8 24
+let float64_ty = Ty.float 11 53
+
+let int_to_string : Expr.term_cst =
+  Expr.Id.mk ~name:"IntToString" ~builtin:IntToString
+    (Dolmen_std.Path.global "IntToString")
+    (Ty.arrow [ Ty.int ] Ty.string)
+
+let string_to_int : Expr.term_cst =
+  Expr.Id.mk ~name:"StringToInt" ~builtin:StringToInt
+    (Dolmen_std.Path.global "StringToInt")
+    (Ty.arrow [ Ty.string ] Ty.int)
+
+let real_to_string : Expr.term_cst =
+  Expr.Id.mk ~name:"RealToString" ~builtin:RealToString
+    (Dolmen_std.Path.global "RealToString")
+    (Ty.arrow [ Ty.real ] Ty.string)
+
+let string_to_real : Expr.term_cst =
+  Expr.Id.mk ~name:"StringToReal" ~builtin:StringToReal
+    (Dolmen_std.Path.global "StringToReal")
+    (Ty.arrow [ Ty.string ] Ty.real)
+
+let trim_string : Expr.term_cst =
+  Expr.Id.mk ~name:"TrimString" ~builtin:TrimString
+    (Dolmen_std.Path.global "TrimString")
+    (Ty.arrow [ Ty.string ] Ty.string)
+
+let f32_to_string : Expr.term_cst =
+  Expr.Id.mk ~name:"F32ToString" ~builtin:F32ToString
+    (Dolmen_std.Path.global "F32ToString")
+    (Ty.arrow [ float32_ty ] Ty.string)
+
+let string_to_f32 : Expr.term_cst =
+  Expr.Id.mk ~name:"StringToF32" ~builtin:StringToF32
+    (Dolmen_std.Path.global "StringToF32")
+    (Ty.arrow [ Ty.string ] float32_ty)
+
+let f64_to_string : Expr.term_cst =
+  Expr.Id.mk ~name:"F64ToString" ~builtin:F64ToString
+    (Dolmen_std.Path.global "F64ToString")
+    (Ty.arrow [ float64_ty ] Ty.string)
+
+let string_to_f64 : Expr.term_cst =
+  Expr.Id.mk ~name:"StringToF64" ~builtin:StringToF64
+    (Dolmen_std.Path.global "StringToF64")
+    (Ty.arrow [ Ty.string ] float64_ty)
+
+module StringValue = Colibri2_core.Value.Register (struct
+  let name = "StringValue"
+
+  module T = struct
+    module Int = Base.Int
+    module List = Base.List
+
+    type t = Int.t List.t [@@deriving hash]
+
+    let equal = List.equal Int.equal
+    let compare = List.compare Int.compare
+    let pp = Fmt.list ~sep:Fmt.comma Int.pp
+  end
+
+  include T
+  include Colibri2_popop_lib.Popop_stdlib.MkDatatype (T)
+end)
+
+let char_seq =
+  let open Base.Sequence.Generator in
+  let rec loop (i : int) = yield i >>= fun () -> loop ((i + 1) mod 256) in
+  Base.Sequence.shift_right (run (loop 1)) 0
+
+let interp_string d =
+  let open Interp.SeqLim in
+  let add_val d l =
+    let+ l' = l and* i = of_seq d char_seq in
+    i :: l'
+  in
+  let size =
+    Interp.SeqLim.of_seq d
+      (Base.Sequence.unfold ~init:() ~f:(fun () -> Some ((), ())))
+  in
+  let l =
+    Interp.SeqLim.unfold_with size
+      ~init:(Interp.SeqLim.of_seq d (Base.Sequence.singleton []))
+      ~f:(fun l () ->
+        let l = add_val d l in
+        Yield (l, l))
+  in
+  let+ l = Interp.SeqLim.limit d (Interp.SeqLim.concat l) in
+  StringValue.nodevalue (StringValue.index l)
+
+let () =
+  let term_app1 ?(get_nseq_arg = Fun.id) env s f =
+    Dolmen_loop.Typer.T.builtin_term
+      (Dolmen_type.Base.term_app1
+         (module Dolmen_loop.Typer.T)
+         env s
+         (fun a -> Expr.Term.apply_cst f [ get_nseq_arg a.Expr.term_ty ] [ a ]))
+  in
+  Expr.add_builtins (fun env s ->
+      match s with
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "IntToString" } ->
+          term_app1 env s int_to_string
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToInt" } ->
+          term_app1 env s string_to_int
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "RealToString" } ->
+          term_app1 env s real_to_string
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToReal" } ->
+          term_app1 env s string_to_real
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "TrimString" } ->
+          term_app1 env s trim_string
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F32ToString" } ->
+          term_app1 env s f32_to_string
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF32" } ->
+          term_app1 env s string_to_f32
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F64ToString" } ->
+          term_app1 env s f64_to_string
+      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF64" } ->
+          term_app1 env s string_to_f64
+      | _ -> `Not_found);
+  Init.add_default_theory (fun d ->
+      Interp.Register.ty d (fun d ty ->
+          match ty with
+          | { app = { builtin = Expr.String; _ }; _ } -> Some (interp_string d)
+          | _ -> None);
+      Interp.Register.check d (fun d t ->
+          match Ground.sem t with
+          | {
+           app =
+             {
+               builtin =
+                 ( Expr.String | IntToString | StringToInt | RealToString
+                 | StringToReal | TrimString | F32ToString | StringToF32
+                 | F64ToString | StringToF64 );
+               _;
+             };
+           _;
+          } ->
+              Interp.check_of_bool (Uninterp.On_uninterpreted_domain.check d t)
+          | _ -> NA);
+      Interp.Register.compute d (fun d t ->
+          match Ground.sem t with
+          | {
+           app =
+             {
+               builtin =
+                 ( Expr.String | IntToString | StringToInt | RealToString
+                 | StringToReal | TrimString | F32ToString | StringToF32
+                 | F64ToString | StringToF64 );
+               _;
+             };
+           _;
+          } ->
+              Uninterp.On_uninterpreted_domain.compute d t
+          | _ -> NA);
+      Ground.register_converter d (fun d t ->
+          let n = Ground.node t in
+          match Ground.sem t with
+          | { app = { builtin = Expr.Str s; _ }; _ } ->
+              let il =
+                String.fold_right (fun c acc -> Char.code c :: acc) s []
+              in
+              Egraph.set_value d n
+                (StringValue.nodevalue (StringValue.index ~basename:s il))
+          | _ -> ()))
+
+let add_default_axioms env =
+  (* string_to_alpha (alpha_to_string x) = x
+     alpha_to_string (string_to_alpha x) = x *)
+  let add_string_axiom =
+    let convert ~subst env =
+      Colibri2_theories_quantifiers.Subst.convert ~subst_new:subst env
+    in
+    let mk_eq env subst t1 t2 =
+      let n1 = convert ~subst env t1 in
+      let n2 = convert ~subst env t2 in
+      Egraph.register env n1;
+      Egraph.register env n2;
+      let eq = Colibri2_theories_bool.Equality.equality env [ n1; n2 ] in
+      Egraph.register env eq;
+      Colibri2_theories_bool.Boolean.set_true env eq
+    in
+    fun env to_string of_string ty ->
+      let x_str = Term.Var.mk "x_str" Ty.string in
+      let xt_str = Term.of_var x_str in
+      let term_str =
+        Term.apply_cst to_string [] [ Term.apply_cst of_string [] [ xt_str ] ]
+      in
+      let x = Term.Var.mk "x" ty in
+      let xt = Term.of_var x in
+      let term =
+        Term.apply_cst of_string [] [ Term.apply_cst to_string [] [ xt ] ]
+      in
+      let pattern_1 =
+        Colibri2_theories_quantifiers.Pattern.of_term_exn term_str
+      in
+      let pattern_2 = Colibri2_theories_quantifiers.Pattern.of_term_exn term in
+      let run_1 env subst = mk_eq env subst xt_str term_str in
+      let run_2 env subst = mk_eq env subst xt term in
+      Colibri2_theories_quantifiers.InvertedPath.add_callback env pattern_1
+        run_1;
+      Colibri2_theories_quantifiers.InvertedPath.add_callback env pattern_2
+        run_2
+  in
+  add_string_axiom env int_to_string string_to_int Ty.int;
+  add_string_axiom env real_to_string string_to_real Ty.real;
+  add_string_axiom env f32_to_string string_to_f32 float32_ty;
+  add_string_axiom env f64_to_string string_to_f64 float64_ty
+
 let int2bv n = LRA.RealValue.Builtin.int2bv n
 
 let get_sort (e : Types.expr_type) : Term.ty =
@@ -79,8 +306,8 @@ let get_sort (e : Types.expr_type) : Term.ty =
   | `StrType -> Ty.string
   | `I32Type -> Ty.bitv 32
   | `I64Type -> Ty.bitv 64
-  | `F32Type -> Ty.float 8 24
-  | `F64Type -> Ty.float 11 53
+  | `F32Type -> float32_ty
+  | `F64Type -> float64_ty
 
 module SHT = Hashtbl.Make (Symbol)
 
@@ -141,8 +368,8 @@ module I :
   let encode_cvtop op e =
     let op' =
       match op with
-      | ToString -> fun _ -> assert false
-      | OfString -> fun _ -> assert false
+      | ToString -> fun v -> Term.apply_cst int_to_string [] [ v ]
+      | OfString -> fun v -> Term.apply_cst string_to_int [] [ v ]
       | ReinterpretReal -> assert false
     in
     op' e
@@ -203,8 +430,8 @@ module Real :
   let encode_cvtop op e =
     let op' =
       match op with
-      | ToString -> assert false
-      | OfString -> assert false
+      | ToString -> fun v -> Term.apply_cst real_to_string [] [ v ]
+      | OfString -> fun v -> Term.apply_cst string_to_real [] [ v ]
       | ConvertUI32 ->
           fun t -> Term.apply_cst (int2bv 32) [] [ Term.Real.to_int t ]
       | ReinterpretInt -> Term.Int.to_real
@@ -278,8 +505,8 @@ module Str :
     let op' = match op with Nth -> assert false | Concat -> assert false in
     op'
 
-  let encode_relop op _e1 _e2 =
-    let op' = match op with Eq -> assert false | Ne -> assert false in
+  let encode_relop op =
+    let op' = match op with Eq -> Term.eq | Ne -> Term.neq in
     op'
 
   let encode_triop op _e1 _e2 _e3 =
@@ -493,8 +720,8 @@ module F32 :
       | ConvertUI32 | ConvertUI64 ->
           Term.Float.ubv_to_fp 8 24 Term.Float.roundNearestTiesToEven
       | ReinterpretInt -> assert false
-      | ToString -> assert false
-      | OfString -> assert false
+      | ToString -> fun v -> Term.apply_cst f32_to_string [] [ v ]
+      | OfString -> fun v -> Term.apply_cst string_to_f32 [] [ v ]
       | PromoteF32 -> assert false
     in
     op' e
@@ -535,8 +762,8 @@ module F64 :
       | ConvertUI32 | ConvertUI64 ->
           Term.Float.ubv_to_fp 11 51 Term.Float.roundNearestTiesToEven
       | ReinterpretInt -> assert false
-      | ToString -> assert false
-      | OfString -> assert false
+      | ToString -> fun v -> Term.apply_cst f64_to_string [] [ v ]
+      | OfString -> fun v -> Term.apply_cst string_to_f64 [] [ v ]
       | PromoteF32 -> assert false
     in
     op' e
@@ -683,8 +910,7 @@ let add_solver (s : solver) (es : Expression.t list) : unit =
 
 let check (s : solver) (es : Expression.t list) : status =
   add_solver s es;
-  let rs = Scheduler.check_sat s.scheduler in
-  rs
+  Scheduler.check_sat s.scheduler
 
 let get_model (s : solver) : model option =
   match Scheduler.check_sat s.scheduler with
@@ -692,7 +918,7 @@ let get_model (s : solver) : model option =
       let l =
         Term.Const.S.fold_left
           (fun acc c ->
-            let e = Expr.Term.apply_cst c [] [] in
+            let e = Expr.Term.of_cst c in
             let v = Interp.interp d e in
             (c, v) :: acc)
           [] s.decls
@@ -729,9 +955,15 @@ let get_value (ty : Types.expr_type) (v : Colibri2_core.Value.t) =
       with
       | Some b -> Some (Value.Bool b)
       | None -> None)
+  | `IntType | `RealType -> (
+      match Colibri2_core.Value.value Colibri2_theories_LRA.RealValue.key v with
+      | Some a when A.is_integer a -> Some (Value.Int (A.to_int a))
+      | Some a when A.is_real a ->
+          Some (Value.Real (Stdlib.Float.of_string (A.to_string a)))
+      | Some _ | None -> None)
   | `I32Type | `I64Type -> assert false
   | `F32Type | `F64Type -> assert false
-  | `IntType | `RealType | `StrType -> assert false
+  | `StrType -> assert false
 
 let value_of_const ((d, _l) : model) (e : Expression.t) : Value.t option =
   let syms = ref Term.Const.S.empty in
@@ -755,3 +987,6 @@ let satisfiability =
   | `Unsat -> Unsatisfiable
   | `Search -> assert false
   | `StepLimitReached -> assert false
+
+let set_default_axioms s =
+  Scheduler.add_assertion s.scheduler add_default_axioms

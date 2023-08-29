@@ -4,6 +4,7 @@
   test_int
   test_real
   test_f32
+  test_f32_c2
   test_bool
   test_str
   test_batch
