@@ -12,7 +12,7 @@ let%test "deterministic_nan" =
       FloatingPoint.mk_is_nan x `F32Type;
     ]
   in
-  false = Batch.check_sat solver pc
+  false = Batch.check solver pc
 
 (* let%test "nondeterministic_nan" =
    let pc =

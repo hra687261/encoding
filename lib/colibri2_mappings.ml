@@ -54,25 +54,27 @@ module Sim = OcplibSimplex.Basic.Make (Var) (Rat) (Ex)
 type optimize = Sim.Core.t
 type handle = optimize * (Sim.Core.P.t * bool) option
 
-type solver = {
-  scheduler : Scheduler.t;
-  mutable state :
-    [ `Sat of Colibri2_core.Egraph.wt
-    | `Unknown of Colibri2_core.Egraph.wt
-    | `Search
-    | `Unsat
-    | `StepLimitReached ];
-  mutable status_colibri :
-    [ `No | `Sat | `Unsat | `Unknown | `StepLimitReached ] Context.Ref.t;
-  mutable decls : Term.Const.S.t;
-}
+type solver =
+  { scheduler : Scheduler.t
+  ; mutable state :
+      [ `Sat of Colibri2_core.Egraph.wt
+      | `Unknown of Colibri2_core.Egraph.wt
+      | `Search
+      | `Unsat
+      | `StepLimitReached
+      ]
+  ; mutable status_colibri :
+      [ `No | `Sat | `Unsat | `Unknown | `StepLimitReached ] Context.Ref.t
+  ; mutable decls : Term.Const.S.t
+  }
 
 type status =
   [ `Sat of Colibri2_core.Egraph.wt
   | `Unknown of Colibri2_core.Egraph.wt
   | `Search
   | `Unsat
-  | `StepLimitReached ]
+  | `StepLimitReached
+  ]
 
 (* additional builtins *)
 
@@ -161,7 +163,8 @@ let char_seq =
 let interp_string d =
   let open Interp.SeqLim in
   let add_val d l =
-    let+ l' = l and* i = of_seq d char_seq in
+    let+ l' = l
+    and* i = of_seq d char_seq in
     i :: l'
   in
   let size =
@@ -173,7 +176,7 @@ let interp_string d =
       ~init:(Interp.SeqLim.of_seq d (Base.Sequence.singleton []))
       ~f:(fun l () ->
         let l = add_val d l in
-        Yield (l, l))
+        Yield (l, l) )
   in
   let+ l = Interp.SeqLim.limit d (Interp.SeqLim.concat l) in
   StringValue.nodevalue (StringValue.index l)
@@ -184,74 +187,68 @@ let () =
       (Dolmen_type.Base.term_app1
          (module Dolmen_loop.Typer.T)
          env s
-         (fun a -> Expr.Term.apply_cst f [ get_nseq_arg a.Expr.term_ty ] [ a ]))
+         (fun a -> Expr.Term.apply_cst f [ get_nseq_arg a.Expr.term_ty ] [ a ]) )
   in
   Expr.add_builtins (fun env s ->
-      match s with
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "IntToString" } ->
-          term_app1 env s int_to_string
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToInt" } ->
-          term_app1 env s string_to_int
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "RealToString" } ->
-          term_app1 env s real_to_string
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToReal" } ->
-          term_app1 env s string_to_real
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "TrimString" } ->
-          term_app1 env s trim_string
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F32ToString" } ->
-          term_app1 env s f32_to_string
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF32" } ->
-          term_app1 env s string_to_f32
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F64ToString" } ->
-          term_app1 env s f64_to_string
-      | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF64" } ->
-          term_app1 env s string_to_f64
-      | _ -> `Not_found);
+    match s with
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "IntToString" } ->
+      term_app1 env s int_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToInt" } ->
+      term_app1 env s string_to_int
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "RealToString" } ->
+      term_app1 env s real_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToReal" } ->
+      term_app1 env s string_to_real
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "TrimString" } ->
+      term_app1 env s trim_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F32ToString" } ->
+      term_app1 env s f32_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF32" } ->
+      term_app1 env s string_to_f32
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F64ToString" } ->
+      term_app1 env s f64_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF64" } ->
+      term_app1 env s string_to_f64
+    | _ -> `Not_found );
   Init.add_default_theory (fun d ->
-      Interp.Register.ty d (fun d ty ->
-          match ty with
-          | { app = { builtin = Expr.String; _ }; _ } -> Some (interp_string d)
-          | _ -> None);
-      Interp.Register.check d (fun d t ->
-          match Ground.sem t with
-          | {
-           app =
-             {
-               builtin =
-                 ( Expr.String | IntToString | StringToInt | RealToString
-                 | StringToReal | TrimString | F32ToString | StringToF32
-                 | F64ToString | StringToF64 );
-               _;
-             };
-           _;
-          } ->
-              Interp.check_of_bool (Uninterp.On_uninterpreted_domain.check d t)
-          | _ -> NA);
-      Interp.Register.compute d (fun d t ->
-          match Ground.sem t with
-          | {
-           app =
-             {
-               builtin =
-                 ( Expr.String | IntToString | StringToInt | RealToString
-                 | StringToReal | TrimString | F32ToString | StringToF32
-                 | F64ToString | StringToF64 );
-               _;
-             };
-           _;
-          } ->
-              Uninterp.On_uninterpreted_domain.compute d t
-          | _ -> NA);
-      Ground.register_converter d (fun d t ->
-          let n = Ground.node t in
-          match Ground.sem t with
-          | { app = { builtin = Expr.Str s; _ }; _ } ->
-              let il =
-                String.fold_right (fun c acc -> Char.code c :: acc) s []
-              in
-              Egraph.set_value d n
-                (StringValue.nodevalue (StringValue.index ~basename:s il))
-          | _ -> ()))
+    Interp.Register.ty d (fun d ty ->
+      match ty with
+      | { app = { builtin = Expr.String; _ }; _ } -> Some (interp_string d)
+      | _ -> None );
+    Interp.Register.check d (fun d t ->
+      match Ground.sem t with
+      | { app =
+            { builtin =
+                ( Expr.String | IntToString | StringToInt | RealToString
+                | StringToReal | TrimString | F32ToString | StringToF32
+                | F64ToString | StringToF64 )
+            ; _
+            }
+        ; _
+        } ->
+        Interp.check_of_bool (Uninterp.On_uninterpreted_domain.check d t)
+      | _ -> NA );
+    Interp.Register.compute d (fun d t ->
+      match Ground.sem t with
+      | { app =
+            { builtin =
+                ( Expr.String | IntToString | StringToInt | RealToString
+                | StringToReal | TrimString | F32ToString | StringToF32
+                | F64ToString | StringToF64 )
+            ; _
+            }
+        ; _
+        } ->
+        Uninterp.On_uninterpreted_domain.compute d t
+      | _ -> NA );
+    Ground.register_converter d (fun d t ->
+      let n = Ground.node t in
+      match Ground.sem t with
+      | { app = { builtin = Expr.Str s; _ }; _ } ->
+        let il = String.fold_right (fun c acc -> Char.code c :: acc) s [] in
+        Egraph.set_value d n
+          (StringValue.nodevalue (StringValue.index ~basename:s il))
+      | _ -> () ) )
 
 let add_default_axioms env =
   (* string_to_alpha (alpha_to_string x) = x
@@ -316,10 +313,11 @@ let sym_cache = SHT.create 17
 let sym2const (s : Symbol.t) =
   match SHT.find_opt sym_cache s with
   | None ->
-      let x = Symbol.to_string s and t = Symbol.type_of s in
-      let cst = Term.Const.mk (Dolmen_std.Path.global x) (get_sort t) in
-      SHT.add sym_cache s cst;
-      cst
+    let x = Symbol.to_string s
+    and t = Symbol.type_of s in
+    let cst = Term.Const.mk (Dolmen_std.Path.global x) (get_sort t) in
+    SHT.add sym_cache s cst;
+    cst
   | Some c -> c
 
 module I :
@@ -433,10 +431,10 @@ module Real :
       | ToString -> fun v -> Term.apply_cst real_to_string [] [ v ]
       | OfString -> fun v -> Term.apply_cst string_to_real [] [ v ]
       | ConvertUI32 ->
-          fun t -> Term.apply_cst (int2bv 32) [] [ Term.Real.to_int t ]
+        fun t -> Term.apply_cst (int2bv 32) [] [ Term.Real.to_int t ]
       | ReinterpretInt -> Term.Int.to_real
       | DemoteF64 | ConvertSI32 | ConvertSI64 | ConvertUI64 | PromoteF32 ->
-          assert false
+        assert false
     in
     op' e
 
@@ -583,7 +581,7 @@ module I32 :
     else
       Term.Bitv.neg
         (Term.apply_cst (int2bv 32) []
-           [ Term.Int.mk (Int32.to_string (Int32.abs i)) ])
+           [ Term.Int.mk (Int32.to_string (Int32.abs i)) ] )
 
   let encode_unop = BV.encode_unop
   let encode_binop = BV.encode_binop
@@ -622,7 +620,7 @@ module I64 :
     else
       Term.Bitv.neg
         (Term.apply_cst (int2bv 64) []
-           [ Term.Int.mk (Int64.to_string (Int64.abs n)) ])
+           [ Term.Int.mk (Int64.to_string (Int64.abs n)) ] )
 
   let encode_unop = BV.encode_unop
   let encode_binop = BV.encode_binop
@@ -700,12 +698,12 @@ module F32 :
 
   let encode_val n =
     Term.Float.ieee_format_to_fp 8 24
-      (if Int32.compare n Int32.zero >= 0 then
-         Term.apply_cst (int2bv 32) [] [ Term.Int.mk (Int32.to_string n) ]
-       else
-         Term.Bitv.neg
-           (Term.apply_cst (int2bv 32) []
-              [ Term.Int.mk (Int32.to_string (Int32.abs n)) ]))
+      ( if Int32.compare n Int32.zero >= 0 then
+          Term.apply_cst (int2bv 32) [] [ Term.Int.mk (Int32.to_string n) ]
+        else
+          Term.Bitv.neg
+            (Term.apply_cst (int2bv 32) []
+               [ Term.Int.mk (Int32.to_string (Int32.abs n)) ] ) )
 
   let encode_unop = Float.encode_unop
   let encode_binop = Float.encode_binop
@@ -716,9 +714,9 @@ module F32 :
       match op with
       | DemoteF64 -> Term.Float.ieee_format_to_fp 8 24
       | ConvertSI32 | ConvertSI64 ->
-          Term.Float.sbv_to_fp 8 24 Term.Float.roundNearestTiesToEven
+        Term.Float.sbv_to_fp 8 24 Term.Float.roundNearestTiesToEven
       | ConvertUI32 | ConvertUI64 ->
-          Term.Float.ubv_to_fp 8 24 Term.Float.roundNearestTiesToEven
+        Term.Float.ubv_to_fp 8 24 Term.Float.roundNearestTiesToEven
       | ReinterpretInt -> assert false
       | ToString -> fun v -> Term.apply_cst f32_to_string [] [ v ]
       | OfString -> fun v -> Term.apply_cst string_to_f32 [] [ v ]
@@ -742,12 +740,12 @@ module F64 :
 
   let encode_val n =
     Term.Float.ieee_format_to_fp 11 53
-      (if Int64.compare n Int64.zero >= 0 then
-         Term.apply_cst (int2bv 64) [] [ Term.Int.mk (Int64.to_string n) ]
-       else
-         Term.Bitv.neg
-           (Term.apply_cst (int2bv 64) []
-              [ Term.Int.mk (Int64.to_string (Int64.abs n)) ]))
+      ( if Int64.compare n Int64.zero >= 0 then
+          Term.apply_cst (int2bv 64) [] [ Term.Int.mk (Int64.to_string n) ]
+        else
+          Term.Bitv.neg
+            (Term.apply_cst (int2bv 64) []
+               [ Term.Int.mk (Int64.to_string (Int64.abs n)) ] ) )
 
   let encode_unop = Float.encode_unop
   let encode_binop = Float.encode_binop
@@ -758,9 +756,9 @@ module F64 :
       match op with
       | DemoteF64 -> Term.Float.ieee_format_to_fp 11 51
       | ConvertSI32 | ConvertSI64 ->
-          Term.Float.sbv_to_fp 11 51 Term.Float.roundNearestTiesToEven
+        Term.Float.sbv_to_fp 11 51 Term.Float.roundNearestTiesToEven
       | ConvertUI32 | ConvertUI64 ->
-          Term.Float.ubv_to_fp 11 51 Term.Float.roundNearestTiesToEven
+        Term.Float.ubv_to_fp 11 51 Term.Float.roundNearestTiesToEven
       | ReinterpretInt -> assert false
       | ToString -> fun v -> Term.apply_cst f64_to_string [] [ v ]
       | OfString -> fun v -> Term.apply_cst string_to_f64 [] [ v ]
@@ -812,13 +810,13 @@ let symbol_to_var v =
   Term.Var.mk (Symbol.to_string v) (get_sort (Symbol.type_of v))
 
 let encode_unviversal_quantifier (vars_list : Symbol.t list) (body : expr)
-    (_patterns : expr list) : expr =
+  (_patterns : expr list) : expr =
   (* TODO: support triggers *)
   let vars = List.map symbol_to_var vars_list in
   Term.all ([], vars) body
 
 let encore_existential_quantifier (vars_list : Symbol.t list) (body : expr)
-    (_patterns : expr list) : expr =
+  (_patterns : expr list) : expr =
   (* TODO: support triggers *)
   let vars = List.map symbol_to_var vars_list in
   Term.ex ([], vars) body
@@ -829,47 +827,52 @@ let encore_expr_aux ?(record_sym = fun _ -> ()) (e : Expression.t) : expr =
     match e with
     | Val v -> encode_val v
     | SymPtr (base, offset) ->
-        let base' = encode_val (Num (I32 base)) in
-        let offset' = aux offset in
-        Term.Bitv.add base' offset'
+      let base' = encode_val (Num (I32 base)) in
+      let offset' = aux offset in
+      Term.Bitv.add base' offset'
     | Unop (op, e) ->
-        let e' = aux e in
-        encode_unop op e'
+      let e' = aux e in
+      encode_unop op e'
     | Binop (I32 ExtendS, Val (Num (I32 n)), e) ->
-        let e' = aux e in
-        Term.Bitv.sign_extend (Int32.to_int n) e'
+      let e' = aux e in
+      Term.Bitv.sign_extend (Int32.to_int n) e'
     | Binop (I32 ExtendU, Val (Num (I32 n)), e) ->
-        let e' = aux e in
-        Term.Bitv.zero_extend (Int32.to_int n) e'
+      let e' = aux e in
+      Term.Bitv.zero_extend (Int32.to_int n) e'
     | Binop (op, e1, e2) ->
-        let e1' = aux e1 and e2' = aux e2 in
-        encode_binop op e1' e2'
+      let e1' = aux e1
+      and e2' = aux e2 in
+      encode_binop op e1' e2'
     | Triop (op, e1, e2, e3) ->
-        let e1' = aux e1 and e2' = aux e2 and e3' = aux e3 in
-        encode_triop op e1' e2' e3'
+      let e1' = aux e1
+      and e2' = aux e2
+      and e3' = aux e3 in
+      encode_triop op e1' e2' e3'
     | Relop (op, e1, e2) ->
-        let e1' = aux e1 and e2' = aux e2 in
-        encode_relop op e1' e2'
+      let e1' = aux e1
+      and e2' = aux e2 in
+      encode_relop op e1' e2'
     | Cvtop (op, e) ->
-        let e' = aux e in
-        encode_cvtop op e'
+      let e' = aux e in
+      encode_cvtop op e'
     | Symbol s ->
-        let cst = sym2const s in
-        record_sym cst;
-        Term.of_cst cst
+      let cst = sym2const s in
+      record_sym cst;
+      Term.of_cst cst
     | Extract (e, h, l) ->
-        let e' = aux e in
-        Term.Bitv.extract ((h * 8) - 1) (l * 8) e'
+      let e' = aux e in
+      Term.Bitv.extract ((h * 8) - 1) (l * 8) e'
     | Concat (e1, e2) ->
-        let e1' = aux e1 and e2' = aux e2 in
-        Term.Bitv.concat e1' e2'
+      let e1' = aux e1
+      and e2' = aux e2 in
+      Term.Bitv.concat e1' e2'
     | Quantifier (t, vars, body, patterns) -> (
-        let body' = aux body in
-        let encode_pattern (p : t list) = Term.multi_trigger (List.map aux p) in
-        let patterns' = List.map encode_pattern patterns in
-        match t with
-        | Forall -> encode_unviversal_quantifier vars body' patterns'
-        | Exists -> encore_existential_quantifier vars body' patterns')
+      let body' = aux body in
+      let encode_pattern (p : t list) = Term.multi_trigger (List.map aux p) in
+      let patterns' = List.map encode_pattern patterns in
+      match t with
+      | Forall -> encode_unviversal_quantifier vars body' patterns'
+      | Exists -> encore_existential_quantifier vars body' patterns' )
   in
   aux e
 
@@ -880,11 +883,10 @@ let mk_solver () : solver =
   let scheduler = Scheduler.new_solver ~learning:true () in
   Scheduler.init_theories scheduler;
   let ctx = Scheduler.get_context scheduler in
-  {
-    scheduler;
-    state = `Search;
-    status_colibri = Context.Ref.create ctx `No;
-    decls = Term.Const.S.empty;
+  { scheduler
+  ; state = `Search
+  ; status_colibri = Context.Ref.create ctx `No
+  ; decls = Term.Const.S.empty
   }
 
 let interrupt () = ()
@@ -893,20 +895,24 @@ let translate ({ state; status_colibri; decls; _ } : solver) : solver =
   let scheduler = Scheduler.new_solver ~learning:true () in
   { scheduler; state; status_colibri; decls }
 
+let push (_s : solver) : unit = ()
+let pop (_s : solver) (_lvl : int) : unit = ()
+let reset (_s : solver) : unit = ()
+
 let add_solver (s : solver) (es : Expression.t list) : unit =
   Scheduler.add_assertion s.scheduler (fun d ->
-      let es' =
-        List.map
-          (encore_expr_aux ~record_sym:(fun c ->
-               s.decls <- Term.Const.S.add c s.decls))
-          es
-      in
-      List.iter
-        (fun e ->
-          let n = Colibri2_core.Ground.convert d e in
-          Colibri2_core.Egraph.register d n;
-          Colibri2_theories_bool.Boolean.set_true d n)
-        es')
+    let es' =
+      List.map
+        (encore_expr_aux ~record_sym:(fun c ->
+           s.decls <- Term.Const.S.add c s.decls ) )
+        es
+    in
+    List.iter
+      (fun e ->
+        let n = Colibri2_core.Ground.convert d e in
+        Colibri2_core.Egraph.register d n;
+        Colibri2_theories_bool.Boolean.set_true d n )
+      es' )
 
 let check (s : solver) (es : Expression.t list) : status =
   add_solver s es;
@@ -915,15 +921,15 @@ let check (s : solver) (es : Expression.t list) : status =
 let get_model (s : solver) : model option =
   match Scheduler.check_sat s.scheduler with
   | `Sat d | `Unknown d ->
-      let l =
-        Term.Const.S.fold_left
-          (fun acc c ->
-            let e = Expr.Term.of_cst c in
-            let v = Interp.interp d e in
-            (c, v) :: acc)
-          [] s.decls
-      in
-      Some (d, l)
+    let l =
+      Term.Const.S.fold_left
+        (fun acc c ->
+          let e = Expr.Term.of_cst c in
+          let v = Interp.interp d e in
+          (c, v) :: acc )
+        [] s.decls
+    in
+    Some (d, l)
   | `Unsat -> assert false
   | `StepLimitReached -> assert false
   | `Search -> assert false
@@ -939,28 +945,28 @@ let minimize (_o : optimize) (_e : Expression.t) : handle = assert false
 let get_opt_model (o : optimize) : model Option.t =
   match Sim.Result.get None o with
   | Sim.Core.Sat s ->
-      let _model = (Lazy.force s).Sim.Core.main_vars in
-      (* let l = List.map (fun (n, av) -> (n, LRA.RealValue.of_value av)) model in
-         Some l *)
-      None
+    let _model = (Lazy.force s).Sim.Core.main_vars in
+    (* let l = List.map (fun (n, av) -> (n, LRA.RealValue.of_value av)) model in
+       Some l *)
+    None
   | Sim.Core.Unknown | Sim.Core.Unsat _ | Sim.Core.Unbounded _
   | Sim.Core.Max (_, _) ->
-      None
+    None
 
 let get_value (ty : Types.expr_type) (v : Colibri2_core.Value.t) =
   match ty with
   | `BoolType -> (
-      match
-        Colibri2_core.Value.value Colibri2_theories_bool.Boolean.BoolValue.key v
-      with
-      | Some b -> Some (Value.Bool b)
-      | None -> None)
+    match
+      Colibri2_core.Value.value Colibri2_theories_bool.Boolean.BoolValue.key v
+    with
+    | Some b -> Some (Value.Bool b)
+    | None -> None )
   | `IntType | `RealType -> (
-      match Colibri2_core.Value.value Colibri2_theories_LRA.RealValue.key v with
-      | Some a when A.is_integer a -> Some (Value.Int (A.to_int a))
-      | Some a when A.is_real a ->
-          Some (Value.Real (Stdlib.Float.of_string (A.to_string a)))
-      | Some _ | None -> None)
+    match Colibri2_core.Value.value Colibri2_theories_LRA.RealValue.key v with
+    | Some a when A.is_integer a -> Some (Value.Int (A.to_int a))
+    | Some a when A.is_real a ->
+      Some (Value.Real (Stdlib.Float.of_string (A.to_string a)))
+    | Some _ | None -> None )
   | `I32Type | `I64Type -> assert false
   | `F32Type | `F64Type -> assert false
   | `StrType -> assert false
@@ -976,8 +982,6 @@ let value_of_const ((d, _l) : model) (e : Expression.t) : Value.t option =
 let value_binds ?(symbols : Symbol.t list option) (_model : model) : Model.t =
   ignore symbols;
   assert false
-
-let string_binds (_m : model) : (string * string * string) list = assert false
 
 let satisfiability =
   let open Mappings_intf in

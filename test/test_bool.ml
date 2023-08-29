@@ -1,4 +1,5 @@
 open Encoding
+module Batch = Batch.Make (Z3_mappings)
 
 let test_fun (module Batch : Batch_intf.S) =
   let symb_x = Expression.mk_symbol_s `BoolType "x" in
