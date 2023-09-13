@@ -81,7 +81,7 @@ let string_ty_cst : Expr.Term.ty_const =
     (Dolmen_std.Path.global "StringTy")
     Expr.{ arity = 0; alias = No_alias }
 
-let string_ty = Expr.Ty.apply string_ty_cst []
+let string_ty = Ty.apply string_ty_cst []
 let float32_ty = Ty.float 8 24
 let float64_ty = Ty.float 11 53
 
@@ -208,7 +208,7 @@ let add_default_axioms env =
 
 let int2bv n = LRA.RealValue.Builtin.int2bv n
 
-let get_sort (e : Types.expr_type) : Term.ty =
+let tty_of_etype (e : Types.expr_type) : Term.ty =
   match e with
   | `IntType -> Ty.int
   | `RealType -> Ty.real
@@ -219,19 +219,48 @@ let get_sort (e : Types.expr_type) : Term.ty =
   | `F32Type -> float32_ty
   | `F64Type -> float64_ty
 
+let tty_to_etype (ty : Term.ty) =
+  match ty with
+  | { ty_descr = TyApp ({ builtin = Expr.Int; _ }, _); _ } -> `IntType
+  | { ty_descr = TyApp ({ builtin = Expr.Real; _ }, _); _ } -> `RealType
+  | { ty_descr = TyApp ({ builtin = Expr.Prop; _ }, _); _ } -> `BoolType
+  | { ty_descr =
+        TyApp
+          ( { builtin = Expr.Base; path = Absolute { name = "StringTy"; _ }; _ }
+          , _ )
+    ; _
+    } ->
+    `StrType
+  | { ty_descr = TyApp ({ builtin = Expr.Bitv 32; _ }, _); _ } -> `I32Type
+  | { ty_descr = TyApp ({ builtin = Expr.Bitv 64; _ }, _); _ } -> `I64Type
+  | { ty_descr = TyApp ({ builtin = Expr.Float (8, 24); _ }, _); _ } -> `F32Type
+  | { ty_descr = TyApp ({ builtin = Expr.Float (11, 53); _ }, _); _ } ->
+    `F64Type
+  | _ -> assert false
+
 module SHT = Hashtbl.Make (Symbol)
 
 let sym_cache = SHT.create 17
 
-let sym2const (s : Symbol.t) =
+let tcst_of_symbol (s : Symbol.t) =
   match SHT.find_opt sym_cache s with
   | None ->
     let x = Symbol.to_string s
     and t = Symbol.type_of s in
-    let cst = Term.Const.mk (Dolmen_std.Path.global x) (get_sort t) in
+    let cst = Term.Const.mk (Dolmen_std.Path.global x) (tty_of_etype t) in
     SHT.add sym_cache s cst;
     cst
   | Some c -> c
+
+let tcst_to_symbol (c : Expr.term_cst) : Symbol.t =
+  match c with
+  | { builtin = Expr.Base
+    ; path = Local { name } | Absolute { name; _ }
+    ; id_ty
+    ; _
+    } ->
+    Symbol.mk_symbol (tty_to_etype id_ty) name
+  | _ -> assert false
 
 module I :
   Op_intf.S
@@ -720,7 +749,7 @@ let encode_relop : Types.relop -> expr -> expr -> expr =
     F64.encode_relop
 
 let symbol_to_var v =
-  Term.Var.mk (Symbol.to_string v) (get_sort (Symbol.type_of v))
+  Term.Var.mk (Symbol.to_string v) (tty_of_etype (Symbol.type_of v))
 
 let encode_unviversal_quantifier (vars_list : Symbol.t list) (body : expr)
   (_patterns : expr list) : expr =
@@ -769,7 +798,7 @@ let encore_expr_aux ?(record_sym = fun _ -> ()) (e : Expression.t) : expr =
       let e' = aux e in
       encode_cvtop op e'
     | Symbol s ->
-      let cst = sym2const s in
+      let cst = tcst_of_symbol s in
       record_sym cst;
       Term.of_cst cst
     | Extract (e, h, l) ->
@@ -895,7 +924,7 @@ let get_opt_model (o : optimize) : model Option.t =
   | Sim.Core.Max (_, _) ->
     None
 
-let get_value (ty : Types.expr_type) (v : Colibri2_core.Value.t) =
+let c2value_to_value (ty : Types.expr_type) (v : Colibri2_core.Value.t) =
   match ty with
   | `BoolType -> (
     match
@@ -914,16 +943,34 @@ let get_value (ty : Types.expr_type) (v : Colibri2_core.Value.t) =
   | `StrType -> assert false
 
 let value_of_const ((d, _l) : model) (e : Expression.t) : Value.t option =
-  let syms = ref Term.Const.S.empty in
-  let e' =
-    encore_expr_aux ~record_sym:(fun c -> syms := Term.Const.S.add c !syms) e
-  in
+  let e' = encore_expr_aux e in
   let v = Colibri2_core.Interp.interp d e' in
-  get_value (Expression.type_of e) v
+  c2value_to_value (Expression.type_of e) v
 
-let value_binds ?(symbols : Symbol.t list option) (_model : model) : Model.t =
-  ignore symbols;
-  assert false
+let value_binds ?(symbols : Symbol.t list option) ((_, model) : model) : Model.t
+    =
+  let m = Base.Hashtbl.create (module Symbol) in
+  match symbols with
+  | Some symbols ->
+    List.iter
+      (fun sy ->
+        let c = tcst_of_symbol sy in
+        match List.assoc_opt c model with
+        | Some v -> (
+          match c2value_to_value (tty_to_etype c.Expr.id_ty) v with
+          | Some data -> Base.Hashtbl.set m ~key:(tcst_to_symbol c) ~data
+          | None -> () )
+        | _ -> () )
+      symbols;
+    m
+  | None ->
+    List.iter
+      (fun (c, v) ->
+        match c2value_to_value (tty_to_etype c.Expr.id_ty) v with
+        | Some data -> Base.Hashtbl.set m ~key:(tcst_to_symbol c) ~data
+        | None -> () )
+      model;
+    m
 
 let satisfiability =
   let open Mappings_intf in
