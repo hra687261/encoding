@@ -46,6 +46,8 @@
   colibri2.core
   colibri2.solver
   colibri2.theories.bool
+  colibri2.theories.quantifiers
+  colibri2.theories.LRA
   colibri2.theories.LRA.stages.stage0
   colibri2.theories.fp
   ocplib-simplex)

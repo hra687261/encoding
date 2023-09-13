@@ -1,16 +1,14 @@
 exception Error of string
 
 module Expr = Colibri2_core.Expr
-module Term = Colibri2_core.Expr.Term
-module Ty = Colibri2_core.Expr.Ty
-module Std = Colibri2_stdlib.Std
-module A = Std.A
+module Term = Expr.Term
+module Ty = Expr.Ty
+module A = Colibri2_stdlib.Std.A
 module LRA = Colibri2_theories_LRA
 module Scheduler = Colibri2_solver.Scheduler
 module Context = Colibri2_stdlib.Context
 module Interp = Colibri2_core.Interp
 module Uninterp = Colibri2_theories_quantifiers.Uninterp
-module Init = Colibri2_core.Init
 module Ground = Colibri2_core.Ground
 module IArray = Colibri2_popop_lib.IArray
 module Egraph = Colibri2_core.Egraph
@@ -55,7 +53,8 @@ type optimize = Sim.Core.t
 type handle = optimize * (Sim.Core.P.t * bool) option
 
 type solver =
-  { scheduler : Scheduler.t
+  { mutable scheduler : Scheduler.t
+  ; mutable pushpop : Scheduler.bp list
   ; mutable state :
       [ `Sat of Colibri2_core.Egraph.wt
       | `Unknown of Colibri2_core.Egraph.wt
@@ -77,111 +76,64 @@ type status =
   ]
 
 (* additional builtins *)
+let string_ty_cst : Expr.Term.ty_const =
+  Expr.Id.mk ~builtin:Expr.Base
+    (Dolmen_std.Path.global "StringTy")
+    Expr.{ arity = 0; alias = No_alias }
 
-type _ Expr.t +=
-  | IntToString
-  | StringToInt
-  | RealToString
-  | StringToReal
-  | TrimString
-  | F32ToString
-  | StringToF32
-  | F64ToString
-  | StringToF64
-
+let string_ty = Expr.Ty.apply string_ty_cst []
 let float32_ty = Ty.float 8 24
 let float64_ty = Ty.float 11 53
 
 let int_to_string : Expr.term_cst =
-  Expr.Id.mk ~name:"IntToString" ~builtin:IntToString
+  Expr.Id.mk ~name:"IntToString" ~builtin:Expr.Base
     (Dolmen_std.Path.global "IntToString")
-    (Ty.arrow [ Ty.int ] Ty.string)
+    (Ty.arrow [ Ty.int ] string_ty)
 
 let string_to_int : Expr.term_cst =
-  Expr.Id.mk ~name:"StringToInt" ~builtin:StringToInt
+  Expr.Id.mk ~name:"StringToInt" ~builtin:Expr.Base
     (Dolmen_std.Path.global "StringToInt")
-    (Ty.arrow [ Ty.string ] Ty.int)
+    (Ty.arrow [ string_ty ] Ty.int)
 
 let real_to_string : Expr.term_cst =
-  Expr.Id.mk ~name:"RealToString" ~builtin:RealToString
+  Expr.Id.mk ~name:"RealToString" ~builtin:Expr.Base
     (Dolmen_std.Path.global "RealToString")
-    (Ty.arrow [ Ty.real ] Ty.string)
+    (Ty.arrow [ Ty.real ] string_ty)
 
 let string_to_real : Expr.term_cst =
-  Expr.Id.mk ~name:"StringToReal" ~builtin:StringToReal
+  Expr.Id.mk ~name:"StringToReal" ~builtin:Expr.Base
     (Dolmen_std.Path.global "StringToReal")
-    (Ty.arrow [ Ty.string ] Ty.real)
+    (Ty.arrow [ string_ty ] Ty.real)
 
 let trim_string : Expr.term_cst =
-  Expr.Id.mk ~name:"TrimString" ~builtin:TrimString
+  Expr.Id.mk ~name:"TrimString" ~builtin:Expr.Base
     (Dolmen_std.Path.global "TrimString")
-    (Ty.arrow [ Ty.string ] Ty.string)
+    (Ty.arrow [ string_ty ] string_ty)
 
 let f32_to_string : Expr.term_cst =
-  Expr.Id.mk ~name:"F32ToString" ~builtin:F32ToString
+  Expr.Id.mk ~name:"F32ToString" ~builtin:Expr.Base
     (Dolmen_std.Path.global "F32ToString")
-    (Ty.arrow [ float32_ty ] Ty.string)
+    (Ty.arrow [ float32_ty ] string_ty)
 
 let string_to_f32 : Expr.term_cst =
-  Expr.Id.mk ~name:"StringToF32" ~builtin:StringToF32
+  Expr.Id.mk ~name:"StringToF32" ~builtin:Expr.Base
     (Dolmen_std.Path.global "StringToF32")
-    (Ty.arrow [ Ty.string ] float32_ty)
+    (Ty.arrow [ string_ty ] float32_ty)
 
 let f64_to_string : Expr.term_cst =
-  Expr.Id.mk ~name:"F64ToString" ~builtin:F64ToString
+  Expr.Id.mk ~name:"F64ToString" ~builtin:Expr.Base
     (Dolmen_std.Path.global "F64ToString")
-    (Ty.arrow [ float64_ty ] Ty.string)
+    (Ty.arrow [ float64_ty ] string_ty)
 
 let string_to_f64 : Expr.term_cst =
-  Expr.Id.mk ~name:"StringToF64" ~builtin:StringToF64
+  Expr.Id.mk ~name:"StringToF64" ~builtin:Expr.Base
     (Dolmen_std.Path.global "StringToF64")
-    (Ty.arrow [ Ty.string ] float64_ty)
+    (Ty.arrow [ string_ty ] float64_ty)
 
-module StringValue = Colibri2_core.Value.Register (struct
-  let name = "StringValue"
-
-  module T = struct
-    module Int = Base.Int
-    module List = Base.List
-
-    type t = Int.t List.t [@@deriving hash]
-
-    let equal = List.equal Int.equal
-    let compare = List.compare Int.compare
-    let pp = Fmt.list ~sep:Fmt.comma Int.pp
-  end
-
-  include T
-  include Colibri2_popop_lib.Popop_stdlib.MkDatatype (T)
-end)
-
-let char_seq =
-  let open Base.Sequence.Generator in
-  let rec loop (i : int) = yield i >>= fun () -> loop ((i + 1) mod 256) in
-  Base.Sequence.shift_right (run (loop 1)) 0
-
-let interp_string d =
-  let open Interp.SeqLim in
-  let add_val d l =
-    let+ l' = l
-    and* i = of_seq d char_seq in
-    i :: l'
-  in
-  let size =
-    Interp.SeqLim.of_seq d
-      (Base.Sequence.unfold ~init:() ~f:(fun () -> Some ((), ())))
-  in
-  let l =
-    Interp.SeqLim.unfold_with size
-      ~init:(Interp.SeqLim.of_seq d (Base.Sequence.singleton []))
-      ~f:(fun l () ->
-        let l = add_val d l in
-        Yield (l, l) )
-  in
-  let+ l = Interp.SeqLim.limit d (Interp.SeqLim.concat l) in
-  StringValue.nodevalue (StringValue.index l)
+let step_limit = None
 
 let () =
+  (* Colibri2_stdlib.Debug.set_info_flags true; *)
   let term_app1 ?(get_nseq_arg = Fun.id) env s f =
     Dolmen_loop.Typer.T.builtin_term
       (Dolmen_type.Base.term_app1
@@ -209,46 +161,7 @@ let () =
       term_app1 env s f64_to_string
     | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF64" } ->
       term_app1 env s string_to_f64
-    | _ -> `Not_found );
-  Init.add_default_theory (fun d ->
-    Interp.Register.ty d (fun d ty ->
-      match ty with
-      | { app = { builtin = Expr.String; _ }; _ } -> Some (interp_string d)
-      | _ -> None );
-    Interp.Register.check d (fun d t ->
-      match Ground.sem t with
-      | { app =
-            { builtin =
-                ( Expr.String | IntToString | StringToInt | RealToString
-                | StringToReal | TrimString | F32ToString | StringToF32
-                | F64ToString | StringToF64 )
-            ; _
-            }
-        ; _
-        } ->
-        Interp.check_of_bool (Uninterp.On_uninterpreted_domain.check d t)
-      | _ -> NA );
-    Interp.Register.compute d (fun d t ->
-      match Ground.sem t with
-      | { app =
-            { builtin =
-                ( Expr.String | IntToString | StringToInt | RealToString
-                | StringToReal | TrimString | F32ToString | StringToF32
-                | F64ToString | StringToF64 )
-            ; _
-            }
-        ; _
-        } ->
-        Uninterp.On_uninterpreted_domain.compute d t
-      | _ -> NA );
-    Ground.register_converter d (fun d t ->
-      let n = Ground.node t in
-      match Ground.sem t with
-      | { app = { builtin = Expr.Str s; _ }; _ } ->
-        let il = String.fold_right (fun c acc -> Char.code c :: acc) s [] in
-        Egraph.set_value d n
-          (StringValue.nodevalue (StringValue.index ~basename:s il))
-      | _ -> () ) )
+    | _ -> `Not_found )
 
 let add_default_axioms env =
   (* string_to_alpha (alpha_to_string x) = x
@@ -267,7 +180,7 @@ let add_default_axioms env =
       Colibri2_theories_bool.Boolean.set_true env eq
     in
     fun env to_string of_string ty ->
-      let x_str = Term.Var.mk "x_str" Ty.string in
+      let x_str = Term.Var.mk "x_str" string_ty in
       let xt_str = Term.of_var x_str in
       let term_str =
         Term.apply_cst to_string [] [ Term.apply_cst of_string [] [ xt_str ] ]
@@ -300,7 +213,7 @@ let get_sort (e : Types.expr_type) : Term.ty =
   | `IntType -> Ty.int
   | `RealType -> Ty.real
   | `BoolType -> Ty.bool
-  | `StrType -> Ty.string
+  | `StrType -> string_ty
   | `I32Type -> Ty.bitv 32
   | `I64Type -> Ty.bitv 64
   | `F32Type -> float32_ty
@@ -879,11 +792,20 @@ let encore_expr_aux ?(record_sym = fun _ -> ()) (e : Expression.t) : expr =
 let encode_expr e = encore_expr_aux e
 let expr_to_smtstring _ _ = ""
 
-let mk_solver () : solver =
+let mk_scheduler () : Scheduler.t =
   let scheduler = Scheduler.new_solver ~learning:true () in
-  Scheduler.init_theories scheduler;
+  Scheduler.init_theories
+    ~theories:
+      ( LRA.LRA.th_register :: Colibri2_theories_fp.Fp.th_register
+      :: Colibri2_core.ForSchedulers.default_theories () )
+    scheduler;
+  scheduler
+
+let mk_solver () : solver =
+  let scheduler = mk_scheduler () in
   let ctx = Scheduler.get_context scheduler in
   { scheduler
+  ; pushpop = []
   ; state = `Search
   ; status_colibri = Context.Ref.create ctx `No
   ; decls = Term.Const.S.empty
@@ -891,13 +813,33 @@ let mk_solver () : solver =
 
 let interrupt () = ()
 
-let translate ({ state; status_colibri; decls; _ } : solver) : solver =
-  let scheduler = Scheduler.new_solver ~learning:true () in
-  { scheduler; state; status_colibri; decls }
+let translate ({ pushpop; state; status_colibri; decls; _ } : solver) : solver =
+  let scheduler = mk_scheduler () in
+  { scheduler; pushpop; state; status_colibri; decls }
 
-let push (_s : solver) : unit = ()
-let pop (_s : solver) (_lvl : int) : unit = ()
-let reset (_s : solver) : unit = ()
+let push (st : solver) : unit =
+  st.pushpop <- Scheduler.push st.scheduler :: st.pushpop
+
+let rec pop (st : solver) (i : int) : unit =
+  assert (0 <= i);
+  match (i, st.pushpop) with
+  | 0, _ -> ()
+  | _, [] -> assert false
+  | 1, bp :: l ->
+    st.pushpop <- l;
+    Scheduler.pop_to st.scheduler bp
+  | n, _ :: l ->
+    st.pushpop <- l;
+    pop st (n - 1)
+
+let reset (s : solver) : unit =
+  let scheduler = mk_scheduler () in
+  let ctx = Scheduler.get_context scheduler in
+  s.scheduler <- scheduler;
+  s.pushpop <- [];
+  s.state <- `Search;
+  s.status_colibri <- Context.Ref.create ctx `No;
+  s.decls <- Term.Const.S.empty
 
 let add_solver (s : solver) (es : Expression.t list) : unit =
   Scheduler.add_assertion s.scheduler (fun d ->
@@ -916,10 +858,10 @@ let add_solver (s : solver) (es : Expression.t list) : unit =
 
 let check (s : solver) (es : Expression.t list) : status =
   add_solver s es;
-  Scheduler.check_sat s.scheduler
+  Scheduler.check_sat ?step_limit s.scheduler
 
 let get_model (s : solver) : model option =
-  match Scheduler.check_sat s.scheduler with
+  match Scheduler.check_sat ?step_limit s.scheduler with
   | `Sat d | `Unknown d ->
     let l =
       Term.Const.S.fold_left
