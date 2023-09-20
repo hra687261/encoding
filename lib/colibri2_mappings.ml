@@ -722,6 +722,7 @@ let encore_expr_aux ?(record_sym = fun _ -> ()) (e : Expression.t) : expr =
   aux e
 
 let () =
+  Colibri2_stdlib.Debug.set_info_flags (Options.get_debug ());
   let term_app1 env s f =
     Dolmen_loop.Typer.T.builtin_term
       (Dolmen_type.Base.term_app1

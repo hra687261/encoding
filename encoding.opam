@@ -17,6 +17,7 @@ depends: [
   "menhir"
   "ppx_inline_test"
   "ppx_expect"
+  "cmdliner"
   "odoc" {with-doc}
 ]
 build: [

@@ -39,7 +39,8 @@
   symbol
   types
   value
-  z3_mappings)
+  z3_mappings
+  colibri2_mappings)
  (libraries
   core
   z3

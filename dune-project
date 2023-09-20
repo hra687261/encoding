@@ -27,4 +27,5 @@
    core_unix
    menhir
    ppx_inline_test
-   ppx_expect))
+   ppx_expect
+   cmdliner))
