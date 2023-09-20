@@ -1,8 +1,8 @@
 exception Error of string
 
 module Expr = Colibri2_core.Expr
-module Term = Expr.Term
 module Ty = Expr.Ty
+module Term = Expr.Term
 module A = Colibri2_stdlib.Std.A
 module LRA = Colibri2_theories_LRA
 module Scheduler = Colibri2_solver.Scheduler
@@ -19,7 +19,7 @@ type model =
   Colibri2_core.Egraph.wt * (Term.Const.t * Colibri2_core.Value.t) list
 
 module Var = struct
-  include Term
+  include Term.Var
 
   let is_int _ = false
   let print = pp
@@ -76,6 +76,7 @@ type status =
   ]
 
 (* additional builtins *)
+
 let string_ty_cst : Expr.Term.ty_const =
   Expr.Id.mk ~builtin:Expr.Base
     (Dolmen_std.Path.global "StringTy")
@@ -105,6 +106,11 @@ let string_to_real : Expr.term_cst =
     (Dolmen_std.Path.global "StringToReal")
     (Ty.arrow [ string_ty ] Ty.real)
 
+let real_to_uint32 : Expr.term_cst =
+  Expr.Id.mk ~name:"RealToUInt32" ~builtin:Expr.Base
+    (Dolmen_std.Path.global "RealToUInt32")
+    (Ty.arrow [ Ty.real ] Ty.real)
+
 let trim_string : Expr.term_cst =
   Expr.Id.mk ~name:"TrimString" ~builtin:Expr.Base
     (Dolmen_std.Path.global "TrimString")
@@ -130,83 +136,7 @@ let string_to_f64 : Expr.term_cst =
     (Dolmen_std.Path.global "StringToF64")
     (Ty.arrow [ string_ty ] float64_ty)
 
-let step_limit = None
-
-let () =
-  (* Colibri2_stdlib.Debug.set_info_flags true; *)
-  let term_app1 ?(get_nseq_arg = Fun.id) env s f =
-    Dolmen_loop.Typer.T.builtin_term
-      (Dolmen_type.Base.term_app1
-         (module Dolmen_loop.Typer.T)
-         env s
-         (fun a -> Expr.Term.apply_cst f [ get_nseq_arg a.Expr.term_ty ] [ a ]) )
-  in
-  Expr.add_builtins (fun env s ->
-    match s with
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "IntToString" } ->
-      term_app1 env s int_to_string
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToInt" } ->
-      term_app1 env s string_to_int
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "RealToString" } ->
-      term_app1 env s real_to_string
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToReal" } ->
-      term_app1 env s string_to_real
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "TrimString" } ->
-      term_app1 env s trim_string
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F32ToString" } ->
-      term_app1 env s f32_to_string
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF32" } ->
-      term_app1 env s string_to_f32
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F64ToString" } ->
-      term_app1 env s f64_to_string
-    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF64" } ->
-      term_app1 env s string_to_f64
-    | _ -> `Not_found )
-
-let add_default_axioms env =
-  (* string_to_alpha (alpha_to_string x) = x
-     alpha_to_string (string_to_alpha x) = x *)
-  let add_string_axiom =
-    let convert ~subst env =
-      Colibri2_theories_quantifiers.Subst.convert ~subst_new:subst env
-    in
-    let mk_eq env subst t1 t2 =
-      let n1 = convert ~subst env t1 in
-      let n2 = convert ~subst env t2 in
-      Egraph.register env n1;
-      Egraph.register env n2;
-      let eq = Colibri2_theories_bool.Equality.equality env [ n1; n2 ] in
-      Egraph.register env eq;
-      Colibri2_theories_bool.Boolean.set_true env eq
-    in
-    fun env to_string of_string ty ->
-      let x_str = Term.Var.mk "x_str" string_ty in
-      let xt_str = Term.of_var x_str in
-      let term_str =
-        Term.apply_cst to_string [] [ Term.apply_cst of_string [] [ xt_str ] ]
-      in
-      let x = Term.Var.mk "x" ty in
-      let xt = Term.of_var x in
-      let term =
-        Term.apply_cst of_string [] [ Term.apply_cst to_string [] [ xt ] ]
-      in
-      let pattern_1 =
-        Colibri2_theories_quantifiers.Pattern.of_term_exn term_str
-      in
-      let pattern_2 = Colibri2_theories_quantifiers.Pattern.of_term_exn term in
-      let run_1 env subst = mk_eq env subst xt_str term_str in
-      let run_2 env subst = mk_eq env subst xt term in
-      Colibri2_theories_quantifiers.InvertedPath.add_callback env pattern_1
-        run_1;
-      Colibri2_theories_quantifiers.InvertedPath.add_callback env pattern_2
-        run_2
-  in
-  add_string_axiom env int_to_string string_to_int Ty.int;
-  add_string_axiom env real_to_string string_to_real Ty.real;
-  add_string_axiom env f32_to_string string_to_f32 float32_ty;
-  add_string_axiom env f64_to_string string_to_f64 float64_ty
-
-let int2bv n = LRA.RealValue.Builtin.int2bv n
+module SHT = Hashtbl.Make (Symbol)
 
 let tty_of_etype (e : Types.expr_type) : Term.ty =
   match e with
@@ -237,8 +167,6 @@ let tty_to_etype (ty : Term.ty) =
   | { ty_descr = TyApp ({ builtin = Expr.Float (11, 53); _ }, _); _ } ->
     `F64Type
   | _ -> assert false
-
-module SHT = Hashtbl.Make (Symbol)
 
 let sym_cache = SHT.create 17
 
@@ -372,8 +300,7 @@ module Real :
       match op with
       | ToString -> fun v -> Term.apply_cst real_to_string [] [ v ]
       | OfString -> fun v -> Term.apply_cst string_to_real [] [ v ]
-      | ConvertUI32 ->
-        fun t -> Term.apply_cst (int2bv 32) [] [ Term.Real.to_int t ]
+      | ConvertUI32 -> fun t -> Term.apply_cst real_to_uint32 [] [ t ]
       | ReinterpretInt -> Term.Int.to_real
       | DemoteF64 | ConvertSI32 | ConvertSI64 | ConvertUI64 | PromoteF32 ->
         assert false
@@ -518,12 +445,8 @@ module I32 :
   open Types.I32
 
   let encode_val i =
-    if Int32.compare i Int32.zero >= 0 then
-      Term.apply_cst (int2bv 32) [] [ Term.Int.mk (Int32.to_string i) ]
-    else
-      Term.Bitv.neg
-        (Term.apply_cst (int2bv 32) []
-           [ Term.Int.mk (Int32.to_string (Int32.abs i)) ] )
+    Term.Bitv.mk
+      (Dolmen_type.Misc.Bitv.parse_decimal ("bv" ^ Int32.to_string i) 32)
 
   let encode_unop = BV.encode_unop
   let encode_binop = BV.encode_binop
@@ -556,13 +479,9 @@ module I64 :
      and type triop := Types.I64.triop = struct
   open Types.I64
 
-  let encode_val n =
-    if Int64.compare n Int64.zero >= 0 then
-      Term.apply_cst (int2bv 64) [] [ Term.Int.mk (Int64.to_string n) ]
-    else
-      Term.Bitv.neg
-        (Term.apply_cst (int2bv 64) []
-           [ Term.Int.mk (Int64.to_string (Int64.abs n)) ] )
+  let encode_val i =
+    Term.Bitv.mk
+      (Dolmen_type.Misc.Bitv.parse_decimal ("bv" ^ Int64.to_string i) 64)
 
   let encode_unop = BV.encode_unop
   let encode_binop = BV.encode_binop
@@ -638,15 +557,7 @@ module F32 :
      and type triop := Types.F32.triop = struct
   open Types.F32
 
-  let encode_val n =
-    Term.Float.ieee_format_to_fp 8 24
-      ( if Int32.compare n Int32.zero >= 0 then
-          Term.apply_cst (int2bv 32) [] [ Term.Int.mk (Int32.to_string n) ]
-        else
-          Term.Bitv.neg
-            (Term.apply_cst (int2bv 32) []
-               [ Term.Int.mk (Int32.to_string (Int32.abs n)) ] ) )
-
+  let encode_val n = Term.Float.ieee_format_to_fp 8 24 (I32.encode_val n)
   let encode_unop = Float.encode_unop
   let encode_binop = Float.encode_binop
   let encode_relop = Float.encode_relop
@@ -680,15 +591,7 @@ module F64 :
      and type triop := Types.F64.triop = struct
   open Types.F64
 
-  let encode_val n =
-    Term.Float.ieee_format_to_fp 11 53
-      ( if Int64.compare n Int64.zero >= 0 then
-          Term.apply_cst (int2bv 64) [] [ Term.Int.mk (Int64.to_string n) ]
-        else
-          Term.Bitv.neg
-            (Term.apply_cst (int2bv 64) []
-               [ Term.Int.mk (Int64.to_string (Int64.abs n)) ] ) )
-
+  let encode_val n = Term.Float.ieee_format_to_fp 11 53 (I64.encode_val n)
   let encode_unop = Float.encode_unop
   let encode_binop = Float.encode_binop
   let encode_relop = Float.encode_relop
@@ -749,7 +652,7 @@ let encode_relop : Types.relop -> expr -> expr -> expr =
     F64.encode_relop
 
 let symbol_to_var v =
-  Term.Var.mk (Symbol.to_string v) (tty_of_etype (Symbol.type_of v))
+  Expr.Term.Var.mk (Symbol.to_string v) (tty_of_etype (Symbol.type_of v))
 
 let encode_unviversal_quantifier (vars_list : Symbol.t list) (body : expr)
   (_patterns : expr list) : expr =
@@ -818,11 +721,82 @@ let encore_expr_aux ?(record_sym = fun _ -> ()) (e : Expression.t) : expr =
   in
   aux e
 
+let () =
+  let term_app1 env s f =
+    Dolmen_loop.Typer.T.builtin_term
+      (Dolmen_type.Base.term_app1
+         (module Dolmen_loop.Typer.T)
+         env s
+         (fun a -> Expr.Term.apply_cst f [ a.Expr.term_ty ] [ a ]) )
+  in
+  Expr.add_builtins (fun env s ->
+    match s with
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToInt" } ->
+      term_app1 env s string_to_int
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "RealToString" } ->
+      term_app1 env s real_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToReal" } ->
+      term_app1 env s string_to_real
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "TrimString" } ->
+      term_app1 env s trim_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F32ToString" } ->
+      term_app1 env s f32_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF32" } ->
+      term_app1 env s string_to_f32
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "F64ToString" } ->
+      term_app1 env s f64_to_string
+    | Dolmen_loop.Typer.T.Id { ns = Term; name = Simple "StringToF64" } ->
+      term_app1 env s string_to_f64
+    | _ -> `Not_found )
+
+let add_default_axioms env =
+  (* string_to_alpha (alpha_to_string x) = x
+     alpha_to_string (string_to_alpha x) = x *)
+  let add_string_axiom =
+    let convert ~subst env =
+      Colibri2_theories_quantifiers.Subst.convert ~subst_new:subst env
+    in
+    let mk_eq env subst t1 t2 =
+      let n1 = convert ~subst env t1 in
+      let n2 = convert ~subst env t2 in
+      Egraph.register env n1;
+      Egraph.register env n2;
+      let eq = Colibri2_theories_bool.Equality.equality env [ n1; n2 ] in
+      Egraph.register env eq;
+      Colibri2_theories_bool.Boolean.set_true env eq
+    in
+    fun env to_string of_string ty ->
+      let x_str = Term.Var.mk "x_str" string_ty in
+      let xt_str = Term.of_var x_str in
+      let term_str =
+        Term.apply_cst to_string [] [ Term.apply_cst of_string [] [ xt_str ] ]
+      in
+      let x = Term.Var.mk "x" ty in
+      let xt = Term.of_var x in
+      let term =
+        Term.apply_cst of_string [] [ Term.apply_cst to_string [] [ xt ] ]
+      in
+      let pattern_1 =
+        Colibri2_theories_quantifiers.Pattern.of_term_exn term_str
+      in
+      let pattern_2 = Colibri2_theories_quantifiers.Pattern.of_term_exn term in
+      let run_1 env subst = mk_eq env subst xt_str term_str in
+      let run_2 env subst = mk_eq env subst xt term in
+      Colibri2_theories_quantifiers.InvertedPath.add_callback env pattern_1
+        run_1;
+      Colibri2_theories_quantifiers.InvertedPath.add_callback env pattern_2
+        run_2
+  in
+  add_string_axiom env int_to_string string_to_int Ty.int;
+  add_string_axiom env real_to_string string_to_real Ty.real;
+  add_string_axiom env f32_to_string string_to_f32 float32_ty;
+  add_string_axiom env f64_to_string string_to_f64 float64_ty
+
 let encode_expr e = encore_expr_aux e
 let expr_to_smtstring _ _ = ""
 
 let mk_scheduler () : Scheduler.t =
-  let scheduler = Scheduler.new_solver ~learning:true () in
+  let scheduler = Scheduler.new_solver ~learning:false () in
   Scheduler.init_theories
     ~theories:
       ( LRA.LRA.th_register :: Colibri2_theories_fp.Fp.th_register
@@ -887,10 +861,10 @@ let add_solver (s : solver) (es : Expression.t list) : unit =
 
 let check (s : solver) (es : Expression.t list) : status =
   add_solver s es;
-  Scheduler.check_sat ?step_limit s.scheduler
+  Scheduler.check_sat s.scheduler
 
 let get_model (s : solver) : model option =
-  match Scheduler.check_sat ?step_limit s.scheduler with
+  match Scheduler.check_sat s.scheduler with
   | `Sat d | `Unknown d ->
     let l =
       Term.Const.S.fold_left
@@ -907,9 +881,8 @@ let get_model (s : solver) : model option =
 
 let mk_opt () : optimize = Sim.Core.empty ~is_int:false ~check_invs:false
 let add_opt (_o : optimize) (_es : Expression.t list) : unit = assert false
-
-let maximize (o : optimize) (e : Expression.t) : handle =
-  Sim.Solve.maximize o (Sim.Core.P.from_list [ (encore_expr_aux e, A.one) ])
+let maximize (_o : optimize) (_e : Expression.t) : handle = assert false
+(* Sim.Solve.maximize o (Sim.Core.P.from_list [ (encore_expr_aux e, A.one) ]) *)
 
 let minimize (_o : optimize) (_e : Expression.t) : handle = assert false
 
