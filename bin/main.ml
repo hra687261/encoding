@@ -29,13 +29,13 @@ let prover_conv =
 
 let parse_cmdline =
   let aux files prover incremental debug =
-    Options.set_debug debug;
     let module Mappings =
       ( val match prover with
             | Z3_prover -> (module Z3_mappings)
             | Colibri2_prover -> (module Colibri2_mappings)
           : Mappings_intf.S )
     in
+    Mappings.set_debug debug;
     let module Interpret =
       ( val if incremental then
               (module Interpret.Make (Incremental.Make (Mappings)))

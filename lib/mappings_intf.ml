@@ -33,4 +33,5 @@ module type S = sig
   val value_binds : ?symbols:Symbol.t list -> model -> Model.t
   val satisfiability : status -> satisfiability
   val set_default_axioms : solver -> unit
+  val set_debug : bool -> unit
 end

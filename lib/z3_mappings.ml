@@ -861,6 +861,9 @@ module Fresh = struct
       | Z3.Solver.SATISFIABLE -> Satisfiable
       | Z3.Solver.UNSATISFIABLE -> Unsatisfiable
       | Z3.Solver.UNKNOWN -> Unknown
+
+    let set_default_axioms s = add_solver s Axioms.axioms
+    let set_debug _ = ()
   end
 end
 
