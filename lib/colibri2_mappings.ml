@@ -222,7 +222,11 @@ module Fresh = struct
           | Mul -> Term.Int.mul
           | Div -> Term.Int.div
           | Rem -> Term.Int.rem
-          | Pow -> Term.Int.pow
+          | Pow ->
+            fun e1 e2 ->
+              Term.apply_cst
+                Colibri2_theories_LRA.RealValue.Builtin.colibri_pow_int_int []
+                [ e1; e2 ]
           | _ -> raise (Error "Unsupported integer operations")
         in
         op' e1 e2
