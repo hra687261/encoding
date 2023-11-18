@@ -823,7 +823,8 @@ module Fresh = struct
       let scheduler = Scheduler.new_solver ~learning:false () in
       Scheduler.init_theories
         ~theories:
-          ( LRA.LRA.th_register :: Colibri2_theories_fp.Fp.th_register
+          ( Colibri2_theories_bool.Ite.th_register :: LRA.LRA.th_register
+          :: Colibri2_theories_fp.Fp.th_register
           :: Colibri2_core.ForSchedulers.default_theories () )
         scheduler;
       scheduler
