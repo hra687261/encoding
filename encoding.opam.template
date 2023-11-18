@@ -1,3 +1,3 @@
 pin-depends: [
-  [ "colibri2" "git+ssh://git@git.frama-c.com/pub/colibrics.git#minor_changes"]
+  [ "colibri2" "git+ssh://git@git.frama-c.com/pub/colibrics.git#hra687261/nseq_and_diff_logic"]
 ]
