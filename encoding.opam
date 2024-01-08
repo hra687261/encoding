@@ -11,12 +11,12 @@ depends: [
   "dune" {>= "3.0"}
   "ocaml" {>= "4.14.0"}
   "z3" {>= "4.11.2" & < "4.13"}
-  "colibri2"
   "core"
   "core_unix"
   "menhir"
   "ppx_inline_test"
   "ppx_expect"
+  "colibri2"
   "cmdliner"
   "odoc" {with-doc}
 ]
@@ -36,5 +36,5 @@ build: [
 ]
 dev-repo: "git+https://github.com/wasp-platform/encoding.git"
 pin-depends: [
-  [ "colibri2" "git+ssh://git@git.frama-c.com/pub/colibrics.git#minor_changes"]
+  [ "colibri2" "git+ssh://git@git.frama-c.com/pub/colibrics.git#master"]
 ]

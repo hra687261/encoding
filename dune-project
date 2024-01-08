@@ -22,10 +22,10 @@
    dune
    (ocaml (>= "4.14.0"))
    (z3 (and (>= "4.11.2") (< "4.13")))
-   colibri2
    core
    core_unix
    menhir
    ppx_inline_test
    ppx_expect
+   colibri2
    cmdliner))

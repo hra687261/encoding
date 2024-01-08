@@ -1,7 +1,7 @@
 open Encoding
 
-let test_fun (module Batch : Batch_intf.S) =
-  let symb_x = Expression.mk_symbol_s `BoolType "x" in
+let test_fun (module Batch : Solver_intf.S) =
+  let symb_x = Symbol.mk_symbol `BoolType "x" in
   let x = Expression.mk_symbol symb_x in
   let pc = [ Boolean.mk_not (Boolean.mk_eq x (Boolean.mk_val true)) ] in
   let solver = Batch.create () in

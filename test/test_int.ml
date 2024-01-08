@@ -10,6 +10,12 @@ module Test (Mapping : Mappings_intf.S) = struct
   let zero = Integer.mk_val Int.zero
   let x = Expression.mk_symbol_s `IntType "x"
 
+  (* Encoding *)
+  let%test_unit _ = encode one
+  let%test_unit _ = encode minus_one
+  let%test_unit _ = encode zero
+  let%test_unit _ = encode x
+
   (* Satisfiability *)
   let%test _ = Batch.check solver [ Integer.mk_gt x zero ]
   let%test _ = Batch.check solver [ Integer.mk_gt one minus_one ]

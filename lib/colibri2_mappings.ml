@@ -457,8 +457,11 @@ module Fresh = struct
       open Types.I32
 
       let encode_val i =
+        let iint = Int32.to_int i in
+        let n = if iint >= 0 then iint else iint land ((1 lsl 32) - 1) in
+        (* necessary to have the same behaviour as Z3 *)
         Term.Bitv.mk
-          (Dolmen_type.Misc.Bitv.parse_decimal ("bv" ^ Int32.to_string i) 32)
+          (Dolmen_type.Misc.Bitv.parse_decimal ("bv" ^ Int.to_string n) 32)
 
       let encode_unop = BV.encode_unop
       let encode_binop = BV.encode_binop
@@ -494,8 +497,13 @@ module Fresh = struct
       open Types.I64
 
       let encode_val i =
+        let n =
+          if Int64.compare i Int64.zero >= 0 then Z.of_int64 i
+          else Z.logand (Z.of_int64 i) (Z.sub (Z.( lsl ) Z.one 64) Z.one)
+        in
+        (* necessary to have the same behaviour as Z3 *)
         Term.Bitv.mk
-          (Dolmen_type.Misc.Bitv.parse_decimal ("bv" ^ Int64.to_string i) 64)
+          (Dolmen_type.Misc.Bitv.parse_decimal ("bv" ^ Z.to_string n) 64)
 
       let encode_unop = BV.encode_unop
       let encode_binop = BV.encode_binop
