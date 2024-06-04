@@ -94,15 +94,13 @@ module Fresh = struct
       | `Unknown of Colibri2_core.Egraph.wt
       | `Search
       | `Unsat
-      | `StepLimitReached
+      | `UnknownUnsat
       ]
 
     type solver =
       { mutable scheduler : Scheduler.t
       ; mutable pushpop : Scheduler.bp list
       ; mutable state : status
-      ; mutable status_colibri :
-          [ `No | `Sat | `Unsat | `Unknown | `StepLimitReached ] Context.Ref.t
       ; mutable decls : DTerm.Const.S.t
       }
 
@@ -872,19 +870,17 @@ module Fresh = struct
 
       let make ?params:_ ?logic:_ () =
         let scheduler = mk_scheduler () in
-        let ctx = Scheduler.get_context scheduler in
         { scheduler
         ; pushpop = []
         ; state = `Search
-        ; status_colibri = Context.Ref.create ctx `No
         ; decls = DTerm.Const.S.empty
         }
 
       let add_simplifier s = s
 
-      let clone { pushpop; state; status_colibri; decls; _ } =
+      let clone { pushpop; state; decls; _ } =
         let scheduler = mk_scheduler () in
-        { scheduler; pushpop; state; status_colibri; decls }
+        { scheduler; pushpop; state; decls }
 
       let push st = st.pushpop <- Scheduler.push st.scheduler :: st.pushpop
 
@@ -902,11 +898,9 @@ module Fresh = struct
 
       let reset s =
         let scheduler = mk_scheduler () in
-        let ctx = Scheduler.get_context scheduler in
         s.scheduler <- scheduler;
         s.pushpop <- [];
         s.state <- `Search;
-        s.status_colibri <- Context.Ref.create ctx `No;
         s.decls <- DTerm.Const.S.empty
 
       let new_assertion env e =
@@ -925,29 +919,49 @@ module Fresh = struct
             List.iter (fun e -> new_assertion d e) es' )
 
       let check s ~assumptions =
-        match assumptions with
-        | [] -> satisfiability s @@ Scheduler.check_sat s.scheduler
-        | _ ->
-          let bp = Scheduler.push s.scheduler in
-          add s assumptions;
-          let res = satisfiability s @@ Scheduler.check_sat s.scheduler in
-          Scheduler.pop_to s.scheduler bp;
-          res
+        let res =
+          match assumptions with
+          | [] ->
+            Fmt.pf Fmt.stderr "check-sat@.";
+            Scheduler.check_sat s.scheduler
+          | _ ->
+            Fmt.pf Fmt.stderr "check-sat-assuming@.";
+            let bp = Scheduler.push s.scheduler in
+            add s assumptions;
+            let res = Scheduler.check_sat s.scheduler in
+            Scheduler.pop_to s.scheduler bp;
+            res
+        in
+        s.state <- res;
+        satisfiability s res
 
       let model s : model option =
-        match Scheduler.check_sat s.scheduler with
-        | `Sat d | `Unknown d ->
-          let l =
-            DTerm.Const.S.fold_left
-              (fun acc c ->
-                let e = DExpr.Term.of_cst c in
-                let v = Interp.interp d e in
-                (c, v) :: acc )
-              [] s.decls
-          in
-          Some (d, l)
-        | `Unsat -> assert false
-        | `UnknownUnsat -> assert false
+        let d =
+          (* match s.state with
+             | `Unsat -> assert false
+             | `UnknownUnsat -> assert false
+             | `Sat d | `Unknown d ->
+               Fmt.pf Fmt.stderr "model: s.state@.";
+               d
+             | `Search -> *)
+          match Scheduler.check_sat s.scheduler with
+          | `Search -> assert false
+          | `Unsat -> assert false
+          | `UnknownUnsat -> assert false
+          | `Sat d | `Unknown d ->
+            Fmt.pf Fmt.stderr "model: s.scheduler@.";
+            d
+        in
+
+        let l =
+          DTerm.Const.S.fold_left
+            (fun acc c ->
+              let e = DExpr.Term.of_cst c in
+              let v = Interp.interp d e in
+              (c, v) :: acc )
+            [] s.decls
+        in
+        Some (d, l)
 
       let interrupt _ = ()
 
@@ -955,7 +969,7 @@ module Fresh = struct
     end
 
     module Optimizer = struct
-      let make () : optimize = Sim.Core.empty ~is_int:false ~check_invs:false
+      let make _ = assert false
 
       let push _ = ()
 
@@ -965,16 +979,7 @@ module Fresh = struct
 
       let check _ = assert false
 
-      let model o =
-        match Sim.Result.get None o with
-        | Sim.Core.Sat s ->
-          let _model = (Lazy.force s).Sim.Core.main_vars in
-          (* let l = List.map (fun (n, av) -> (n, LRA.RealValue.of_value av)) model in
-             Some l *)
-          None
-        | Sim.Core.Unknown | Sim.Core.Unsat _ | Sim.Core.Unbounded _
-        | Sim.Core.Max (_, _) ->
-          None
+      let model _ = assert false
 
       let maximize _ _ = assert false
 
